@@ -1,0 +1,15 @@
+NAME
+	CI5CO WLC Banhammer 
+
+SYNOPSIS
+	./wlcban
+
+DESCRIPTION
+	The CI5CO WLC Banhammer was created to provide a fast and simple way to ban 
+	users across multiple wireless lan controllers. This tool takes an input of 
+	MAC addresses and a comment, adding, or removing addresses to the diabled 
+	clients list. 
+
+	The script needs to be customized for individual enviornments so please take 
+	time to look at the code. 
+

@@ -1,0 +1,367 @@
+#!/bin/bash
+VERSION=0.0.8
+#
+# wlcban 
+# Created by Tony Mattke on 12/10/15
+# Copyright 2015 Tony Mattke. All rights reserved.
+# http://routerjockey.com tony@mattke.net http://twitter.com/tonhe
+#
+######## variables
+DEBUG=0   # Displays Debug Information
+VERIFY_INFO=0 # Requires most inputs to be verified (not used really used here)
+DELETE_ON_EXIT=1  # Deletes data files created (more secure)
+ALLOW_DEVICE_CONFIG=1 # Allows this script to make changes to devices
+
+# This script requires Bash and Expect
+EXPECT=/usr/bin/expect
+
+# IP Addressing
+WIRELESS1=192.168.1.1
+WIRELESS2=192.168.1.2
+WIRELESS3=192.168.1.3
+
+# working directory
+TMPDIR=~/.banhammer
+
+CF_WIRELESS=$TMPDIR/wireless.config
+EX_WIRELESS1=$TMPDIR/wireless1.expect
+EX_WIRELESS2=$TMPDIR/wireless2.expect
+EX_WIRELESS3=$TMPDIR/wireless3.expect
+
+
+######## init
+mkdir $TMPDIR 2>/dev/null
+rm $TMPDIR/*.config 2>/dev/null
+rm $TMPDIR/*.expect 2>/dev/null
+
+######## functions
+
+function dprint {
+  if [ $DEBUG -eq 1 ]; then
+    echo \(d\) ${1}
+   fi
+}
+
+
+function run_expect_script  {
+ local SCRIPT=${1}
+
+ [[ $ALLOW_DEVICE_CONFIG -eq 1 ]] && $EXPECT -f $SCRIPT
+
+ EC=$? ## store the exit code.
+
+ # Read the exit code of EXPECT, if it isn't 0 there was an issue... 
+ if [ $EC -ne 0 ] ; then
+   echo 
+   echo 
+   echo 
+   echo "***NOTICE***"
+   echo
+   echo
+   echo "Houston, we have a problem."
+   echo
+   echo "Something went wrong while executing our expect script. Some configuration changes"
+   echo "may of been made. Check the output above for more information."
+   echo
+   echo 
+   echo "GAME OVER"
+   echo
+   echo
+   echo
+   exit 1
+  fi
+}
+
+
+function generate_expect_script {
+dprint "-> entering generate_expect_script"
+
+ IP=${1}
+ CONFIG=${2}
+ FILE=${3}
+
+ dprint "IP($IP)"
+ dprint "CONFIG($CONFIG)"
+ dprint "FILE($FILE)"
+
+if [ ! -f $CONFIG ]; then
+	echo
+	echo
+    echo "***NOTICE***"
+	echo
+	echo "Configuration File not found!"
+	echo
+	echo
+	echo "exiting now"
+	echo
+	echo
+	exit 1
+fi
+
+cat > $FILE << EOF
+proc do_exit {msg {code 1}} {
+        puts stderr \$msg
+        exit \$code
+}
+  exp_internal $DEBUG 
+  set timeout 11
+  spawn ssh $USERNAME@$IP
+  match_max 100000
+
+
+expect {
+  timeout { do_exit "\nERROR: Timeout Exceeded - Check Host\n"; }
+  eof { do_exit "\nERROR: SSH Connection To $IP Failed\n"; }
+
+  "*ser:" { 
+    send "$USERNAME\n";
+    expect {
+      "*assword:" {
+      send "$PASSWORD\n";
+      expect {
+        "*>" {}
+        "*assword" { do_exit "\nERROR: Invalid Username or Password\n" 2; }
+      }
+    }
+  }
+}
+  "*Are you sure" { 
+    send "yes\n";
+    expect {
+      "*ser:" {
+        send "$USERNAME\n";
+        expect {
+          "*assword:" { 
+            send "$PASSWORD\n";
+            expect {
+              "*>" {}
+              "*assword" { do_exit "\nERROR: Invalid Username or Password\n" 2; }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+EOF
+
+  oIFS=$IFS
+  IFS=$'\x0A'$'\x0D'
+
+  dprint "-> entering for loop: Config file: $CONFIG"  
+
+  LN=0
+
+  for LINE in `cat $CONFIG`; do 
+    if [[ $LINE != *!* ]]; then
+      LN=$(($LN+1))
+cat >> $FILE << EOF
+send "$LINE\n"
+expect {
+  "*Invalid" { do_exit "\nCommand Execution Failed ($LN)\n"; }
+  "*Incorrect" { do_exit "\nCommand Execution Failed ($LN)\n"; }
+  "*>" {}
+}
+EOF
+    fi
+  done
+
+  dprint "<- exiting for loop... "
+
+  IFS=$oIFS
+
+cat >> $FILE << EOF
+send "save config\n"; 
+expect {
+  "*Are you sure" { 
+    send "y\n";
+    expect {
+		"*>" {}
+	}
+  }
+}
+EOF
+
+  dprint "<- exiting generate_expect_script"
+}
+
+function print_header {
+clear
+echo "
+################################################################################
+##
+##  wlcban - aka the ban hammer v$VERSION
+##"
+}
+
+function read_correct {
+  if [ $VERIFY_INFO -eq 1 ]; then 
+    while :; do
+      read -e -r -p "You entered $1, does this look correct? (Y/n): " SEL
+      case $SEL in
+        [yY][eE][sS]|[yY]|"") 
+          dprint "correct: Yes!"
+          return 0;;  # Yes, this looks backwards. 0 is good.
+        [nN][oO]|[nN]) 
+          dprint "correct: no :("
+          return 1;;
+        *);;
+      esac
+    done
+  else 
+    return 0
+  fi
+}
+
+
+function gather_user_info {
+    while :; do
+      echo
+      read -e -r -p "Username: " USER
+
+      if read_correct $USER; then 
+        break;
+      fi
+    done
+
+    dprint "Username ($USER)"
+
+    while :; do
+      echo
+      read -e -r -s -p "Password: " PASSWORD
+      echo
+      read -e -r -s -p "Verify Password: " PASSWORD2
+      echo
+
+      if [ "$PASSWORD" == "$PASSWORD2" ]; then
+        dprint "Passwords match... "
+        break;
+      else 
+        dprint "Password error..."
+      fi
+
+    done
+
+    USERNAME=$USER
+}
+
+#######################################################################################################################
+
+while :; do
+  print_header
+  echo
+  echo 
+  read -e -r -p "Do you wish to add, or delete MAC Addresses from the blacklist? (Add/delete): " SEL
+  echo
+  echo
+
+  case $SEL in
+    [aA][dD][dD]|"") 
+		ACTION="add"; 
+		echo
+		echo "Enter MAC address(es) to add to the WLC blacklist(blank line to finish)..."
+	    break;;
+
+     [dD][eE][lL]|[dD][eE][lL][eE][tT][eE]) 
+		ACTION="delete"; 
+		echo
+		echo "Enter MAC address(es) to remove from the WLC blacklist(blank line to finish)..."
+		break;;
+  esac #Ready to execute
+ done 
+
+unset MAC_LIST
+
+while :; do
+  read LINE
+  LINE=$(tr -d ' ' <<< "$LINE")
+  [[ $LINE == "" ]] && MAC_LIST="${MAC_LIST:0:$((${#MAC_LIST}-1))}" && break
+  if [[ "$LINE" =~ ^([a-fA-F0-9]{2}:){5}[a-zA-Z0-9]{2}$ ]]; then
+    dprint "$LINE is valid"
+	MAC_LIST="$MAC_LIST"$LINE$'\n'
+  else 
+	echo -e "Invalid MAC Address!! ($LINE)"
+  fi
+done
+
+if [ "$ACTION" == "add" ]; then
+  echo
+  read -r -p "Enter Ticket Number / Comment for Disabled Client(s): " COMMENT
+  dprint $COMMENT
+fi
+
+gather_user_info
+
+echo -n "Generating expect scripts."
+
+for MAC_ADDRESS in `echo $MAC_LIST`; do 
+  dprint $MAC_ADDRESS
+	echo "config exclusionlist $ACTION $MAC_ADDRESS $COMMENT" >> $CF_WIRELESS 
+    echo -n "."
+done
+
+generate_expect_script $WIRELESS1 $CF_WIRELESS $EX_WIRELESS1
+generate_expect_script $WIRELESS2 $CF_WIRELESS $EX_WIRELESS2
+generate_expect_script $WIRELESS3 $CF_WIRELESS $EX_WIRELESS3
+
+echo ". done."
+
+while :; do
+  echo
+  echo
+  read -e -r -p "Do you wish to view the generated configuration? (Y/n): " SEL
+  case $SEL in
+    [yY][eE][sS]|[yY]|"") 
+	  echo
+	  echo 
+      cat $CF_WIRELESS
+	  echo "save config"
+	  echo "yes"
+	  break;;
+    [nN][oO]|[nN]) break;;
+  esac
+done
+
+while :; do
+  echo
+  echo
+  read -e -r -p "Ready to execute... Are you sure? (yes/NO): " SEL
+  echo 
+  echo
+
+  case $SEL in
+    [yY][eE][sS]) 
+		echo
+		echo
+        echo -n "executing script on wireless1.. "
+		run_expect_script $EX_WIRELESS1
+		echo "done."
+		echo
+        echo -n "executing script on wireless2.. "
+		run_expect_script $EX_WIRELESS2
+		echo "done."
+		echo
+        echo -n "executing script on wireless3.. "
+		run_expect_script $EX_WIRELESS3
+		echo "done."
+	    break;;
+     [nN][oO]|"") 
+		echo 
+		echo "no changes made... "
+		echo 
+		break;;
+  esac #Ready to execute
+ done 
+                                                 
+echo
+echo
+echo "fin."
+echo
+
+if [ $DELETE_ON_EXIT -eq 1 ]; then 
+  dprint "deleting data files"
+  rm $TMPDIR/*.config 2>/dev/null
+  rm $TMPDIR/*.expect 2>/dev/null
+fi
+
+exit 0
